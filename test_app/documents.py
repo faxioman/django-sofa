@@ -8,6 +8,7 @@ class UserDocument(DocumentBase):
         model = User
         single_document = False
         document_id = 'user'
+        exclude = ('password',)
 
 
 class GroupsDocument(DocumentBase):
@@ -16,3 +17,4 @@ class GroupsDocument(DocumentBase):
         model = Group
         single_document = True
         document_id = 'groups'
+        exclude = ('permissions',)
