@@ -1,5 +1,4 @@
 from importlib import import_module
-from .base import DocumentBase
 from django.db.models.signals import post_save, post_delete
 
 
@@ -33,6 +32,7 @@ def get_class_by_document_id(document_id):
 def load():
     load_document_classes(get_apps_packages())
     _DOCUMENT_ID_TO_CLASS.clear()
+    from .base import DocumentBase
     for cls in DocumentBase.__subclasses__():
         document_id = cls.Meta.document_id
         if document_id in _DOCUMENT_ID_TO_CLASS:

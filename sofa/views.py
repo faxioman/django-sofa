@@ -9,7 +9,11 @@ from django.views.decorators.http import require_http_methods
 import secrets
 
 from .loader import get_class_by_document_id
-from .models import Change
+from .models import Change, ReplicationLog
+from rest_framework.renderers import JSONRenderer
+
+
+document_renderer = JSONRenderer()
 
 
 @require_http_methods(["GET"])
@@ -53,10 +57,21 @@ def database(request):
 def replication_log(request, replication_id):
     # TODO: generate ETag
     if request.method == 'PUT':
-        # TODO
+        ReplicationLog.objects.create(document_id=replication_id)
         return HttpResponse()
-    # TODO: GET FROM DB OR 404
-    return HttpResponseNotFound(json.dumps({"error": "not_found", "reason": "missing"}), content_type='application/json')
+
+    try:
+        rep_log = ReplicationLog.objects.get(document_id=replication_id)
+        return JsonResponse({
+            "_id": f"__replog.{rep_log.document_id}",
+            "_rev": "1-1",
+            "history": [],
+            "replication_id_version": 3,
+            # "session_id": "d5a34cbbdafa70e0db5cb57d02a6b955",
+            "source_last_seq": Change.objects.latest('id').id
+        })
+    except ReplicationLog.DoesNotExist:
+        return HttpResponseNotFound(json.dumps({"error": "not_found", "reason": "missing"}), content_type='application/json')
 
 
 @require_http_methods(['GET'])
@@ -90,22 +105,43 @@ def changes(request):
             "last_seq": last_change
         })
     else:
-        pass # stupid format
+        pass  # stupid format
 
 
-def iter_documents(requested_docs, initial_boundary):
+@require_http_methods(['POST'])
+@csrf_exempt
+@cache_control(must_revalidate=True)
+def all_docs(request):
+    body = json.loads(request.body.decode('utf-8'))
+    keys = body.get('keys', [])
+    include_docs = request.GET.get('include_docs') == 'true'
+    changes = Change.objects.filter(document_id__in=keys)
+    return JsonResponse({
+        "offset": 0,
+        "rows": [{
+            "id": d.document_id,
+            "key": d.document_id,
+            "value": {
+                "rev": d.revision
+            },
+            "doc": d.get_document() if include_docs else None,
+        } for d in changes],
+        "total_rows": len(changes)
+    })
+
+
+def iter_documents(requested_docs, initial_boundary, return_revisions):
     ids = {d['id'] for d in requested_docs['docs']}
 
-    # only the latest revision is available, so load only the available revisions
-    # a future django-reversion integration could be planned
-    latest_changes = Change.objects.filter(pk__in=Subquery(Change.objects.filter(document_id__in=ids).values('document_id').annotate(last_id=Max('pk')).values('last_id')))
+    latest_changes = Change.objects.get_latest_changes(ids)
 
     docs_map = {}
 
     for change in latest_changes:
         docs_map[change.document_id] = {
             "rev": str(change.revision),
-            "deleted": change.deleted
+            "deleted": change.deleted,
+            "revisions": [d['rev'] for d in requested_docs['docs'] if d['id'] == change.document_id]
         }
 
     for doc in requested_docs['docs']:
@@ -113,7 +149,7 @@ def iter_documents(requested_docs, initial_boundary):
         try:
             if doc['rev'] == docs_map[doc['id']]['rev'] and not docs_map[doc['id']]["deleted"]:
                 document_class = get_class_by_document_id(doc['id'])
-                content = document_class.get_document_content(doc['id'], doc['rev'], [])
+                content = document_renderer.render(document_class.get_document_content(doc['id'], doc['rev'], docs_map[doc['id']]["revisions"] if return_revisions else [])).decode('utf-8')
             else:
                 error = True
                 content = '{"missing": "%s"}' % doc['rev']
@@ -128,6 +164,8 @@ def iter_documents(requested_docs, initial_boundary):
 
         yield f'--{initial_boundary}\r\nContent-Type: application/json{error_content}\r\n\r\n{content}\r\n'
 
+    yield f'--{initial_boundary}--\r\n'
+
 
 @require_http_methods(['POST'])
 @csrf_exempt
@@ -140,9 +178,43 @@ def bulk_get(request):
     initial_boundary = secrets.token_hex(16)
 
     return StreamingHttpResponse(
-        streaming_content=(iter_documents(body, initial_boundary)),
+        streaming_content=(iter_documents(body, initial_boundary, return_revisions)),
         content_type='multipart/mixed; boundary="{}"'.format(initial_boundary),
     )
+
+
+@require_http_methods(['POST'])
+@csrf_exempt
+@cache_control(must_revalidate=True)
+def revs_diff(request):
+    return JsonResponse({})
+
+
+@require_http_methods(['GET', 'POST'])
+@csrf_exempt
+@cache_control(must_revalidate=True)
+def document(request, document_id):
+
+    if request.method == 'GET':
+
+        only_latest = request.GET.get('latest') == 'true'
+        return_revisions = request.GET.get('revs') == 'true'
+        open_revs = json.loads(request.GET.get('open_revs', '[]'))
+
+        if not only_latest:
+            # open_revs could not be ignored
+            raise NotImplementedError
+
+        latest_changes = Change.objects.get_latest_changes(ids=[document_id])
+        last_change = latest_changes[0]
+
+        if last_change.deleted:
+            return JsonResponse([{
+                "missing": last_change.revision
+            }], safe=False)
+        return JsonResponse([latest_changes[0].get_document()], safe=False)
+
+    raise NotImplementedError
 
 
 # https://docs.couchdb.org/en/stable/replication/protocol.html#retrieve-replication-logs-from-source-and-target

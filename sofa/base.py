@@ -1,11 +1,7 @@
 from secrets import token_hex
 
 from rest_framework.serializers import ModelSerializer
-from rest_framework.renderers import JSONRenderer
 from .models import Change
-
-
-document_renderer = JSONRenderer()
 
 
 class DocumentBase(ModelSerializer):
@@ -38,12 +34,12 @@ class DocumentBase(ModelSerializer):
         Model = cls.Meta.model
         if cls.Meta.single_document:
             serializer = cls(Model.objects.all(), many=True)
-            return document_renderer.render(cls.wrap_content_with_metadata(doc_id, serializer.data, revision, revisions)).decode('utf-8')
+            return cls.wrap_content_with_metadata(doc_id, serializer.data, revision, revisions)
         else:
             entity_id = ":".join(doc_id.split(':')[1:])
             entity = Model.objects.get(pk=entity_id)
             serializer = cls(entity)
-            return document_renderer.render(cls.wrap_content_with_metadata(doc_id, serializer.data, revision, revisions)).decode('utf-8')
+            return cls.wrap_content_with_metadata(doc_id, serializer.data, revision, revisions)
 
     @classmethod
     def on_change(cls, instance, **kwargs):
