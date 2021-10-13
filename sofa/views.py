@@ -1,19 +1,23 @@
 import json
 
+from django.db import transaction
 from django.db.models import Max, CharField, Subquery
 from django.db.models.functions import Cast
-from django.http import JsonResponse, HttpResponseForbidden, HttpResponse, HttpResponseNotFound, StreamingHttpResponse
+from django.http import JsonResponse, HttpResponseForbidden, HttpResponse, HttpResponseNotFound, StreamingHttpResponse, HttpResponseBadRequest
 from django.views.decorators.cache import cache_control
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
-import secrets
-
+from django.utils import timezone
+import hashlib
 from .loader import get_class_by_document_id
-from .models import Change, ReplicationLog
+from .models import Change, ReplicationLog, ReplicationHistory
 from rest_framework.renderers import JSONRenderer
+from django.conf import settings
 
 
 document_renderer = JSONRenderer()
+start_time = int(timezone.now().timestamp() * 1000 * 1000)
+server_uuid = hashlib.sha1(settings.SECRET_KEY.encode()).hexdigest()[:32]
 
 
 @require_http_methods(["GET"])
@@ -21,9 +25,11 @@ document_renderer = JSONRenderer()
 def index(request):
     return JsonResponse({
         'couchdb': 'Welcome',
-        'vendor/name': 'Django Sofa Sync Gateway',
-        'vendor/version': '1.0',  # TODO: version from package
-        'version': '1.0',
+        'vendor': {
+            'name': 'Django Sofa Sync Gateway',
+            'version': '1.0',  # TODO: version from package
+        },
+        'version': 'Django Sofa Sync Gateway/1.0',
     })
 
 
@@ -46,8 +52,14 @@ def database(request):
             pass
 
         return JsonResponse({
-            "instance_start_time": "0",
-            "update_seq": last_id
+            "instance_start_time": start_time,
+            "update_seq": last_id,
+            "committed_update_seq": last_id,
+            "compact_running": False,
+            "purge_seq": 0,
+            "disk_format_version": 0,
+            "state": "Online",
+            "server_uuid": server_uuid
         })
 
 
@@ -57,18 +69,38 @@ def database(request):
 def replication_log(request, replication_id):
     # TODO: generate ETag
     if request.method == 'PUT':
-        ReplicationLog.objects.create(document_id=replication_id)
-        return HttpResponse()
+        body = json.loads(request.body.decode('utf-8'))
+        with transaction.atomic():
+            rep_log, _ = ReplicationLog.objects.get_or_create(
+                document_id=replication_id,
+                defaults={
+                    'version': body['version'],
+                    'replicator': body['replicator']
+                }
+            )
+            last_history = ReplicationHistory.objects.create(
+                    replication_log=rep_log,
+                    session_id=body['session_id'],
+                    last_seq=body['last_seq']
+            )
+
+        return JsonResponse({
+            "_id": f"_local/{rep_log.document_id}",
+            "_rev": f"1-{last_history.pk}",
+            "ok": True
+        }, status=201)
 
     try:
-        rep_log = ReplicationLog.objects.get(document_id=replication_id)
+        rep_log = ReplicationLog.objects.prefetch_related('history').get(document_id=replication_id)
+        last_history = rep_log.history.latest('id')
         return JsonResponse({
-            "_id": f"__replog.{rep_log.document_id}",
-            "_rev": "1-1",
-            "history": [],
-            "replication_id_version": 3,
-            # "session_id": "d5a34cbbdafa70e0db5cb57d02a6b955",
-            "source_last_seq": Change.objects.latest('id').id
+            "_id": f"_local/{rep_log.document_id}",
+            "_rev": f"1-{last_history.pk}",
+            "history": [{"last_seq": h.last_seq, "session_id": h.session_id} for h in rep_log.history.all()],
+            "session_id": last_history.session_id,
+            "last_seq": last_history.last_seq,
+            "replicator": rep_log.replicator,
+            "version": rep_log.version
         })
     except ReplicationLog.DoesNotExist:
         return HttpResponseNotFound(json.dumps({"error": "not_found", "reason": "missing"}), content_type='application/json')
@@ -102,7 +134,7 @@ def changes(request):
     if feed == 'normal':
         return JsonResponse({
             "results": results,
-            "last_seq": last_change
+            "last_seq": str(last_change if last_change > 0 else Change.objects.latest('id').id)
         })
     else:
         pass  # stupid format
@@ -130,7 +162,10 @@ def all_docs(request):
     })
 
 
-def iter_documents(requested_docs, initial_boundary, return_revisions):
+def iter_documents(requested_docs, return_revisions):
+
+    yield '{"results": ['
+
     ids = {d['id'] for d in requested_docs['docs']}
 
     latest_changes = Change.objects.get_latest_changes(ids)
@@ -144,27 +179,36 @@ def iter_documents(requested_docs, initial_boundary, return_revisions):
             "revisions": [d['rev'] for d in requested_docs['docs'] if d['id'] == change.document_id]
         }
 
+    first = True
+
     for doc in requested_docs['docs']:
-        error = False
+
+        if not first:
+            yield ","
+
+        yield f'{{"id": "{doc["id"]}", "docs": ['
+
         try:
             if doc['rev'] == docs_map[doc['id']]['rev'] and not docs_map[doc['id']]["deleted"]:
                 document_class = get_class_by_document_id(doc['id'])
-                content = document_renderer.render(document_class.get_document_content(doc['id'], doc['rev'], docs_map[doc['id']]["revisions"] if return_revisions else [])).decode('utf-8')
+                rendered_doc = document_renderer.render(document_class.get_document_content(doc['id'], doc['rev'], docs_map[doc['id']]["revisions"] if return_revisions else [])).decode('utf-8')
+                yield f'{{"ok": {rendered_doc}}}'
             else:
-                error = True
-                content = '{"missing": "%s"}' % doc['rev']
+                raise KeyError
         except KeyError:
-            error = True
-            content = '{"missing": "%s"}' % doc['rev']
+            yield json.dumps({
+                "ok": {
+                    "_id": doc["id"],
+                    "_rev": doc['rev'],
+                    "_deleted": True
+                }
+            })
 
-        if error:
-            error_content = '; error="true"'
-        else:
-            error_content = ''
+        yield ']}'
 
-        yield f'--{initial_boundary}\r\nContent-Type: application/json{error_content}\r\n\r\n{content}\r\n'
+        first = False
 
-    yield f'--{initial_boundary}--\r\n'
+    yield ']}'
 
 
 @require_http_methods(['POST'])
@@ -172,14 +216,16 @@ def iter_documents(requested_docs, initial_boundary, return_revisions):
 @cache_control(must_revalidate=True)
 def bulk_get(request):
     only_latest = request.GET.get('latest') == 'true'
+
+    if not only_latest:
+        return HttpResponseBadRequest('Only latest revision are allowed')
+
     return_revisions = request.GET.get('revs') == 'true'
     body = json.loads(request.body.decode('utf-8'))
 
-    initial_boundary = secrets.token_hex(16)
-
     return StreamingHttpResponse(
-        streaming_content=(iter_documents(body, initial_boundary, return_revisions)),
-        content_type='multipart/mixed; boundary="{}"'.format(initial_boundary),
+        streaming_content=(iter_documents(body, return_revisions)),
+        content_type='application/json',
     )
 
 
@@ -215,6 +261,3 @@ def document(request, document_id):
         return JsonResponse([latest_changes[0].get_document()], safe=False)
 
     raise NotImplementedError
-
-
-# https://docs.couchdb.org/en/stable/replication/protocol.html#retrieve-replication-logs-from-source-and-target

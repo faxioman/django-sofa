@@ -9,7 +9,7 @@ class Change(models.Model):
     document_id = models.CharField(max_length=128, db_index=True)
     revision = models.CharField(max_length=64)
 
-    #TODO: what to do when the document class is deleted. Probably we should set deleted to true... is this possible?
+    #TODO: what to do when the document class is deleted. Probably we should set deleted to true... how?
     deleted = models.BooleanField(default=False)
 
     objects = ChangeManager()
@@ -23,5 +23,12 @@ class Change(models.Model):
 
 
 class ReplicationLog(models.Model):
-    document_id = models.CharField(max_length=128, db_index=True)
-    revision = models.CharField(max_length=64)
+    document_id = models.CharField(max_length=128, unique=True)
+    replicator = models.CharField(max_length=16)
+    version = models.PositiveIntegerField()
+
+
+class ReplicationHistory(models.Model):
+    replication_log = models.ForeignKey(ReplicationLog, related_name='history', on_delete=models.CASCADE)
+    session_id = models.CharField(max_length=16)
+    last_seq = models.PositiveIntegerField()

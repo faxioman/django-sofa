@@ -5,7 +5,6 @@ urlpatterns = [
     path('', index),
     path('db/', database),
     path('db/_local/<replication_id>', replication_log),
-    path('db/__replog.<replication_id>', replication_log),
     path('db/_changes', changes),
     path('db/_all_docs', all_docs),
     path('db/_bulk_get', bulk_get),

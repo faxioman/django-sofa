@@ -1,0 +1,20 @@
+version: "3.8"
+
+services:
+
+  couchbase:
+    image: couchbase:community-6.0.0
+    ports:
+      - "8091:8091"
+      - "8093:8093"
+
+  sync-gateway:
+    image: couchbase/sync-gateway:2.7.0-community
+    command: -adminInterface :4985 /tmp/config/sync.conf
+    ports:
+      - "4984:4984"
+      - "4985:4985"
+    depends_on:
+      - couchbase
+    volumes:
+      - ./couch-conf/:/tmp/config

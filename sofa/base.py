@@ -16,7 +16,7 @@ class DocumentBase(ModelSerializer):
     def wrap_content_with_metadata(cls, document_id, doc, revision, revisions):
         if isinstance(doc, list):
             doc = {
-                "content": doc
+                "value": doc
             }
 
         doc["_id"] = document_id
@@ -24,7 +24,7 @@ class DocumentBase(ModelSerializer):
         if revisions:
             doc["_revisions"] = {
                 "ids": [r.split('-')[1] for r in revisions],
-                "start": 1  # TODO: what the ?
+                "start": len(revisions)
             }
 
         return doc
