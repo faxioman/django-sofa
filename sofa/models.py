@@ -24,11 +24,11 @@ class Change(models.Model):
 
 class ReplicationLog(models.Model):
     document_id = models.CharField(max_length=128, unique=True)
-    replicator = models.CharField(max_length=24)
+    replicator = models.CharField(max_length=64)
     version = models.PositiveIntegerField()
 
 
 class ReplicationHistory(models.Model):
     replication_log = models.ForeignKey(ReplicationLog, related_name='history', on_delete=models.CASCADE)
-    session_id = models.CharField(max_length=24)
+    session_id = models.CharField(max_length=64)
     last_seq = models.PositiveIntegerField()
