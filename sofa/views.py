@@ -154,7 +154,7 @@ def all_docs(request):
             "value": {
                 "rev": d.revision
             },
-            "doc": d.get_document() if include_docs else None,
+            "doc": d.get_document(request) if include_docs else None,
         } for d in changes],
         "total_rows": len(changes)
     })
