@@ -124,7 +124,7 @@ def changes(request):
         row = {
             "seq": change_id, "id": change['document_id'], "changes": list(revisions)
         }
-        if change["deleted"]:
+        if change["deleted"] == 1:
             row["deleted"] = True
 
         results.append(row)
