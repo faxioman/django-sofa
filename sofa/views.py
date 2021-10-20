@@ -173,7 +173,7 @@ def iter_documents(request, requested_docs, return_revisions):
     for change in latest_changes:
         docs_map[change.document_id] = {
             "rev": str(change.revision),
-            "deleted": change.deleted,
+            "deleted": change.deleted == 1,
             "revisions": [d['rev'] for d in requested_docs['docs'] if d['id'] == change.document_id]
         }
 
@@ -272,7 +272,7 @@ def document(request, document_id):
         latest_changes = Change.objects.get_latest_changes(ids=[document_id])
         last_change = latest_changes[0]
 
-        if last_change.deleted:
+        if last_change.deleted == 1:
             return JsonResponse([{
                 "missing": last_change.revision
             }], safe=False)

@@ -10,7 +10,7 @@ class Change(models.Model):
     revision = models.CharField(max_length=64)
 
     #TODO: what to do when the document class is deleted. Probably we should set deleted to true... how?
-    deleted = models.BooleanField(default=False)
+    deleted = models.PositiveIntegerField(default=0)
 
     objects = ChangeManager()
 
