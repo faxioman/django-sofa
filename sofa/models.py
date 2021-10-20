@@ -17,9 +17,9 @@ class Change(models.Model):
     class Meta:
         index_together = (('document_id', 'revision'),)
 
-    def get_document(self):
+    def get_document(self, request):
         document_class = get_class_by_document_id(self.document_id)
-        return document_class.get_document_content(self.document_id, self.revision, [])
+        return document_class.get_document_content(self.document_id, self.revision, [], request)
 
 
 class ReplicationLog(models.Model):

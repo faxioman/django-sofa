@@ -14,6 +14,7 @@ def load_document_classes(packages):
     from django.conf import settings
     for package in packages:
         try:
+            # TODO: add default module name
             import_module('{}.{}'.format(package, settings.SOFA_MODULE_NAME))
         except ImportError:
             pass

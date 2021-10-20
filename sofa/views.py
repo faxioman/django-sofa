@@ -1,7 +1,7 @@
 import json
 
 from django.db import transaction
-from django.db.models import Max, CharField, Subquery
+from django.db.models import Max, CharField, Q
 from django.db.models.functions import Cast
 from django.http import JsonResponse, HttpResponseForbidden, HttpResponse, HttpResponseNotFound, StreamingHttpResponse, HttpResponseBadRequest
 from django.views.decorators.cache import cache_control
@@ -11,11 +11,9 @@ from django.utils import timezone
 import hashlib
 from .loader import get_class_by_document_id
 from .models import Change, ReplicationLog, ReplicationHistory
-from rest_framework.renderers import JSONRenderer
 from django.conf import settings
+from django.core.exceptions import ObjectDoesNotExist
 
-
-document_renderer = JSONRenderer()
 start_time = int(timezone.now().timestamp() * 1000 * 1000)
 server_uuid = hashlib.sha1(settings.SECRET_KEY.encode()).hexdigest()[:32]
 
@@ -38,7 +36,7 @@ def index(request):
 @cache_control(must_revalidate=True)
 def database(request):
     if request.method == 'HEAD':
-        return HttpResponse(content_type='application/json')  # TODO: remove content length
+        return HttpResponse(content_type='application/json')
     if request.method == 'PUT':
         return HttpResponseForbidden(json.dumps({
             "error": "unauthorized",
@@ -137,7 +135,7 @@ def changes(request):
             "last_seq": str(last_change if last_change > 0 else Change.objects.latest('id').id)
         })
     else:
-        pass  # stupid format
+        return HttpResponseBadRequest('{"error": "sync style not implemented"}', content_type='application/json')
 
 
 @require_http_methods(['POST'])
@@ -162,7 +160,7 @@ def all_docs(request):
     })
 
 
-def iter_documents(requested_docs, return_revisions):
+def iter_documents(request, requested_docs, return_revisions):
 
     yield '{"results": ['
 
@@ -191,11 +189,11 @@ def iter_documents(requested_docs, return_revisions):
         try:
             if doc['rev'] == docs_map[doc['id']]['rev'] and not docs_map[doc['id']]["deleted"]:
                 document_class = get_class_by_document_id(doc['id'])
-                rendered_doc = document_renderer.render(document_class.get_document_content(doc['id'], doc['rev'], docs_map[doc['id']]["revisions"] if return_revisions else [])).decode('utf-8')
+                rendered_doc = document_class.get_document_content_as_json(doc['id'], doc['rev'], docs_map[doc['id']]["revisions"] if return_revisions else [], request)
                 yield f'{{"ok": {rendered_doc}}}'
             else:
                 raise KeyError
-        except KeyError:
+        except (KeyError, ObjectDoesNotExist):
             yield json.dumps({
                 "ok": {
                     "_id": doc["id"],
@@ -224,7 +222,7 @@ def bulk_get(request):
     body = json.loads(request.body.decode('utf-8'))
 
     return StreamingHttpResponse(
-        streaming_content=(iter_documents(body, return_revisions)),
+        streaming_content=(iter_documents(request, body, return_revisions)),
         content_type='application/json',
     )
 
@@ -233,7 +231,27 @@ def bulk_get(request):
 @csrf_exempt
 @cache_control(must_revalidate=True)
 def revs_diff(request):
-    return JsonResponse({})
+    body = json.loads(request.body.decode('utf-8'))
+
+    docs_filter = Q()
+
+    for doc_id, revisions in body.items():
+        for revision in revisions:
+            docs_filter |= Q(document_id=doc_id, revision=revision)
+
+    existing_docs = Change.objects.filter(docs_filter)
+    missing = {}
+
+    for doc in existing_docs:
+        if doc.document_id not in body or doc.revision not in body[doc.document_id]:
+            if doc.document_id in missing:
+                missing[doc.document_id]['missing'].append(doc.revision)
+            else:
+                missing[doc.document_id] = {
+                    'missing': [doc.revision]
+                }
+
+    return JsonResponse(missing)
 
 
 @require_http_methods(['GET', 'POST'])
@@ -258,6 +276,21 @@ def document(request, document_id):
             return JsonResponse([{
                 "missing": last_change.revision
             }], safe=False)
-        return JsonResponse([latest_changes[0].get_document()], safe=False)
+        return JsonResponse([latest_changes[0].get_document(request)], safe=False)
 
     raise NotImplementedError
+
+
+@require_http_methods(['POST'])
+@csrf_exempt
+@cache_control(must_revalidate=True)
+def bulk_docs(request):
+    #TODO: the request body should be read as stream
+    body = json.loads(request.body.decode('utf-8'))
+
+    if body.get('new_edits', True):
+        #TODO = auto generate revision id
+        return HttpResponseBadRequest('Docs without revision are not supported')
+
+    for doc in body['docs']:
+        pass
