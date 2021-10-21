@@ -156,7 +156,8 @@ def all_docs(request):
             },
             "doc": d.get_document(request) if include_docs else None,
         } for d in changes],
-        "total_rows": len(changes)
+        "total_rows": len(changes),
+        "update_seq": Change.objects.latest('id').id
     })
 
 
