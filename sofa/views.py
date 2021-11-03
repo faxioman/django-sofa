@@ -142,19 +142,20 @@ def changes(request):
 @csrf_exempt
 @cache_control(must_revalidate=True)
 def all_docs(request):
+    #TODO: make as stream
     body = json.loads(request.body.decode('utf-8'))
     keys = body.get('keys', [])
     include_docs = request.GET.get('include_docs') == 'true'
-    changes = Change.objects.filter(document_id__in=keys)
+    changes = Change.objects.filter(document_id__in=keys).values('document_id', 'revision').annotate(id=Max('pk'))
     return JsonResponse({
         "offset": 0,
         "rows": [{
-            "id": d.document_id,
-            "key": d.document_id,
+            "id": d['document_id'],
+            "key": d['document_id'],
             "value": {
-                "rev": d.revision
+                "rev": f"1-{d['revision']}"
             },
-            "doc": d.get_document(request) if include_docs else None,
+            "doc": Change(document_id=d['document_id'], revision=d['revision']).get_document(request) if include_docs else None,
         } for d in changes],
         "total_rows": len(changes),
         "update_seq": Change.objects.latest('id').id
@@ -175,7 +176,7 @@ def iter_documents(request, requested_docs, return_revisions):
         docs_map[change.document_id] = {
             "rev": str(change.revision),
             "deleted": change.deleted == 1,
-            "revisions": [d['rev'] for d in requested_docs['docs'] if d['id'] == change.document_id]
+            "revisions": Change.objects.get_revisions_for_document(change.document_id)
         }
 
     first = True
@@ -190,7 +191,7 @@ def iter_documents(request, requested_docs, return_revisions):
         try:
             if doc['rev'] == docs_map[doc['id']]['rev'] and docs_map[doc['id']]["deleted"] != 1:
                 document_class = get_class_by_document_id(doc['id'])
-                rendered_doc = document_class.get_document_content_as_json(doc['id'], doc['rev'], docs_map[doc['id']]["revisions"] if return_revisions else [], request)
+                rendered_doc = document_class.get_document_content_as_json(doc['id'], f"1-{doc['rev']}", docs_map[doc['id']]["revisions"] if return_revisions else [], request)
                 yield f'{{"ok": {rendered_doc}}}'
             else:
                 raise KeyError
@@ -198,7 +199,7 @@ def iter_documents(request, requested_docs, return_revisions):
             yield json.dumps({
                 "ok": {
                     "_id": doc["id"],
-                    "_rev": doc['rev'],
+                    "_rev": f"1-{doc['rev']}",
                     "_deleted": True
                 }
             })

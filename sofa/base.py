@@ -26,7 +26,7 @@ class DocumentBase(ModelSerializer):
         doc["_rev"] = revision
         if revisions:
             doc["_revisions"] = {
-                "ids": [r.split('-')[1] for r in revisions],
+                "ids": [r for r in revisions],
                 "start": len(revisions)
             }
 
@@ -52,14 +52,14 @@ class DocumentBase(ModelSerializer):
     def on_change(cls, instance, **kwargs):
         Change.objects.create(
             document_id=cls.get_document_id(instance),
-            revision=instance.__ds_revision if hasattr(instance, '__ds_revision') and instance.__ds_revision else f'1-{token_hex(8)}',
+            revision=instance.__ds_revision if hasattr(instance, '__ds_revision') and instance.__ds_revision else token_hex(8),
         )
 
     @classmethod
     def on_delete(cls, instance, **kwargs):
         Change.objects.create(
             document_id=cls.get_document_id(instance),
-            revision=instance.__ds_revision if hasattr(instance, '__ds_revision') and instance.__ds_revision else f'1-{token_hex(8)}',
+            revision=instance.__ds_revision if hasattr(instance, '__ds_revision') and instance.__ds_revision else token_hex(8),
             deleted=True
         )
 

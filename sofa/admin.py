@@ -4,4 +4,4 @@ from .models import Change
 
 @admin.register(Change)
 class ChangeAdmin(admin.ModelAdmin):
-    pass
+    list_display = ('id', 'document_id', 'revision')
