@@ -191,7 +191,7 @@ def iter_documents(request, requested_docs, return_revisions):
         try:
             if doc['rev'] == docs_map[doc['id']]['rev'] and docs_map[doc['id']]["deleted"] != 1:
                 document_class = get_class_by_document_id(doc['id'])
-                rendered_doc = document_class.get_document_content_as_json(doc['id'], f"1-{doc['rev']}", docs_map[doc['id']]["revisions"] if return_revisions else [], request)
+                rendered_doc = document_class.get_document_content_as_json(doc['id'], doc['rev'], docs_map[doc['id']]["revisions"] if return_revisions else [], request)
                 yield f'{{"ok": {rendered_doc}}}'
             else:
                 raise KeyError

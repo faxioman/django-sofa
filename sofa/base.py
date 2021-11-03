@@ -23,10 +23,10 @@ class DocumentBase(ModelSerializer):
             }
 
         doc["_id"] = document_id
-        doc["_rev"] = revision
+        doc["_rev"] = f"1-{revision}"
         if revisions:
             doc["_revisions"] = {
-                "ids": [r for r in revisions],
+                "ids": revisions,
                 "start": len(revisions)
             }
 

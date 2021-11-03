@@ -19,7 +19,7 @@ class Change(models.Model):
 
     def get_document(self, request):
         document_class = get_class_by_document_id(self.document_id)
-        return document_class.get_document_content(self.document_id, f"1-{self.revision}", [], request)
+        return document_class.get_document_content(self.document_id, self.revision, [], request)
 
 
 class ReplicationLog(models.Model):
