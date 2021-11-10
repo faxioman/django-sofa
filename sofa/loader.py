@@ -22,6 +22,7 @@ def load_document_classes(packages):
 
 def register_to_model_signals(cls):
     Model = cls.Meta.model
+
     post_save.connect(cls.on_change, sender=Model, dispatch_uid="change_{}".format(Model._meta.label_lower))
     post_delete.connect(cls.on_delete, sender=Model, dispatch_uid="delete_{}".format(Model._meta.label_lower))
 

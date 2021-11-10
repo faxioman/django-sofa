@@ -9,11 +9,27 @@ document_renderer = JSONRenderer()
 
 class DocumentBase(ModelSerializer):
     @classmethod
+    def is_single_document(cls):
+        if hasattr(cls.Meta, 'single_document'):
+            return cls.Meta.single_document
+        return False
+
+    @classmethod
+    def get_replica_field(cls):
+        if hasattr(cls.Meta, 'replica_field'):
+            return cls.Meta.replica_field
+        return 'pk'
+
+    @classmethod
+    def get_instance_id_value(cls, instance):
+        return getattr(instance, cls.get_replica_field())
+
+    @classmethod
     def get_document_id(cls, instance):
-        if cls.Meta.single_document:
+        if cls.is_single_document():
             return cls.Meta.document_id
         else:
-            return "{}:{}".format(cls.Meta.document_id, instance.pk)
+            return "{}:{}".format(cls.Meta.document_id, cls.get_instance_id_value(instance))
 
     @classmethod
     def wrap_content_with_metadata(cls, document_id, doc, revision, revisions):
@@ -33,14 +49,21 @@ class DocumentBase(ModelSerializer):
         return doc
 
     @classmethod
-    def get_document_content(cls, doc_id, revision, revisions, request):
-        if cls.Meta.single_document:
-            serializer = cls(cls.get_queryset(request), many=True)
-            return cls.wrap_content_with_metadata(doc_id, serializer.data, revision, revisions)
+    def get_document_instance(cls, doc_id, request):
+        if cls.is_single_document():
+            return cls.get_queryset(request)
         else:
             entity_id = ":".join(doc_id.split(':')[1:])
-            entity = cls.get_queryset(request).get(pk=entity_id)
-            serializer = cls(entity)
+            return cls.get_queryset(request).get(**{cls.get_replica_field(): entity_id})
+
+    @classmethod
+    def get_document_content(cls, doc_id, revision, revisions, request):
+        instance = cls.get_document_instance(doc_id, request)
+        if cls.is_single_document():
+            serializer = cls(instance, many=True)
+            return cls.wrap_content_with_metadata(doc_id, serializer.data, revision, revisions)
+        else:
+            serializer = cls(instance)
             return cls.wrap_content_with_metadata(doc_id, serializer.data, revision, revisions)
 
     @classmethod
@@ -50,16 +73,20 @@ class DocumentBase(ModelSerializer):
 
     @classmethod
     def on_change(cls, instance, **kwargs):
+        doc_id = cls.get_document_id(instance)
+        rev_id = getattr(instance, '__ds_revision', token_hex(8))
         Change.objects.create(
-            document_id=cls.get_document_id(instance),
-            revision=instance.__ds_revision if hasattr(instance, '__ds_revision') and instance.__ds_revision else token_hex(8),
+            document_id=doc_id,
+            revision=rev_id,
         )
 
     @classmethod
     def on_delete(cls, instance, **kwargs):
+        doc_id = cls.get_document_id(instance)
+        rev_id = instance.__ds_revision if hasattr(instance, '__ds_revision') else token_hex(8)
         Change.objects.create(
-            document_id=cls.get_document_id(instance),
-            revision=instance.__ds_revision if hasattr(instance, '__ds_revision') and instance.__ds_revision else token_hex(8),
+            document_id=doc_id,
+            revision=rev_id,
             deleted=True
         )
 

@@ -239,11 +239,12 @@ def revs_diff(request):
 
     for doc_id, revisions in body.items():
         for revision in revisions:
-            docs_filter |= Q(document_id=doc_id, revision=revision)
+            docs_filter |= Q(document_id=doc_id, revision=revision.split('-')[1])
 
     existing_docs = Change.objects.filter(docs_filter)
     missing = {}
 
+    # search missing revisions
     for doc in existing_docs:
         if doc.document_id not in body or doc.revision not in body[doc.document_id]:
             if doc.document_id in missing:
@@ -252,6 +253,14 @@ def revs_diff(request):
                 missing[doc.document_id] = {
                     'missing': [doc.revision]
                 }
+
+    # search missing documents
+    existing_docs_ids = [c.document_id for c in existing_docs]
+    for doc in body.keys():
+        if doc not in existing_docs_ids:
+            missing[doc] = {
+                'missing': body[doc]
+            }
 
     return JsonResponse(missing)
 
@@ -276,23 +285,99 @@ def document(request, document_id):
 
         if last_change.deleted == 1:
             return JsonResponse([{
-                "missing": last_change.revision
+                "missing": f"1-{last_change.revision}"
             }], safe=False)
         return JsonResponse([latest_changes[0].get_document(request)], safe=False)
 
-    raise NotImplementedError
+    if request.method == 'POST':
+        res = []
+
+        # TODO: the request body should be read as stream
+        body = json.loads(request.body.decode('utf-8'))
+
+        if body.get('new_edits', True):
+            # TODO auto generate revision id ... but we are a replicator ... needed?
+            return HttpResponseBadRequest('Docs without revision are not supported')
+
+        for doc in body['docs']:
+            doc_id = doc.pop('_id')
+            rev_id = doc.pop('_rev')
+
+            doc_class = get_class_by_document_id(doc_id)
+            if not doc_class:
+                continue
+
+            if doc_class.is_single_document():
+                continue
+
+            # update doc
+            try:
+                current_instance = doc_class.get_document_instance(doc_id, request)
+            except ObjectDoesNotExist:
+                id_field = doc_class.get_replica_field()
+                current_instance = doc_class.Meta.model(**{id_field: doc_id})
+
+            current_instance.__ds_revision = rev_id.split('-')[1]
+            doc_serializer = doc_class(current_instance, data=doc, partial=True)
+            if doc_serializer.is_valid():
+                #TODO: errors?
+                doc_serializer.save()
+
+                res.append({
+                    "id": doc_id,
+                    "rev": rev_id
+                })
+
+        return JsonResponse(res, safe=False)
 
 
 @require_http_methods(['POST'])
 @csrf_exempt
 @cache_control(must_revalidate=True)
 def bulk_docs(request):
-    #TODO: the request body should be read as stream
+    res = []
+
+    # TODO: the request body should be read as stream
     body = json.loads(request.body.decode('utf-8'))
 
     if body.get('new_edits', True):
-        #TODO = auto generate revision id
+        # TODO auto generate revision id ... but we are a replicator ... needed?
         return HttpResponseBadRequest('Docs without revision are not supported')
 
     for doc in body['docs']:
-        pass
+        doc_id = doc.pop('_id')
+        rev_id = doc.pop('_rev')
+
+        doc_class = get_class_by_document_id(doc_id)
+        if not doc_class:
+            # no related doc in django
+            continue
+
+        if doc_class.is_single_document():
+            # single document updated is not yet implemented
+            continue
+
+        # update doc
+        try:
+            current_instance = doc_class.get_document_instance(doc_id, request)
+        except ObjectDoesNotExist:
+            id_field = doc_class.get_replica_field()
+            current_instance = doc_class.Meta.model(**{id_field: doc_id})
+
+        current_instance.__ds_revision = rev_id.split('-')[1]
+        doc_serializer = doc_class(current_instance, data=doc, partial=True)
+        if doc_serializer.is_valid():
+            #TODO: errors?
+            doc_serializer.save()
+
+            res.append({
+                "id": doc_id,
+                "rev": rev_id
+            })
+
+        res.append({
+            "id": doc_id,
+            "rev": rev_id
+        })
+
+    return JsonResponse(res, safe=False)
