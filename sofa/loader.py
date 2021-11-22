@@ -1,4 +1,6 @@
 from importlib import import_module
+
+from django.db import transaction
 from django.db.models.signals import post_save, post_delete
 
 
@@ -41,3 +43,12 @@ def load():
             raise Exception("Duplicated document_id found in class: {} and {}".format(cls, _DOCUMENT_ID_TO_CLASS[document_id]))
         _DOCUMENT_ID_TO_CLASS[document_id] = cls
         register_to_model_signals(cls)
+
+
+def init_revisions():
+    from .models import Change
+    with transaction.atomic():
+        Change.objects.all().delete()
+        for document_class in _DOCUMENT_ID_TO_CLASS.values():
+            document_class.init_revision()
+

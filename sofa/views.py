@@ -143,7 +143,7 @@ def changes(request):
 @csrf_exempt
 @cache_control(must_revalidate=True)
 def all_docs(request):
-    #TODO: make as stream
+    # TODO: make as stream
     body = json.loads(request.body.decode('utf-8'))
     keys = body.get('keys', [])
     include_docs = request.GET.get('include_docs') == 'true'
@@ -234,7 +234,7 @@ def bulk_get(request):
 @csrf_exempt
 @cache_control(must_revalidate=True)
 def revs_diff(request):
-    #TODO: and deleted document?
+    # TODO: and deleted document?
     changed_docs = json.loads(request.body.decode('utf-8'))
 
     docs_filter = Q()
@@ -298,7 +298,7 @@ def document(request, document_id):
                 # no related doc in django
                 continue
 
-            #TODO: and deleted documents?
+            # TODO: and deleted documents?
             res = doc_class.update_or_create(doc_id, rev_id, doc, request)
             if res:
                 affected.append(res)
@@ -328,7 +328,7 @@ def bulk_docs(request):
             # no related doc in django
             continue
 
-        #TODO: and deleted documents?
+        # TODO: and deleted documents?
         res = doc_class.update_or_create(doc_id, rev_id, doc, request)
         if res:
             affected.append(res)

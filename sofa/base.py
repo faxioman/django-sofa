@@ -1,6 +1,7 @@
 from secrets import token_hex
 
 from django.core.exceptions import ObjectDoesNotExist
+from django.db.models import Subquery
 from rest_framework.serializers import ModelSerializer
 from rest_framework.renderers import JSONRenderer
 from .models import Change
@@ -78,7 +79,7 @@ class DocumentBase(ModelSerializer):
     @classmethod
     def on_change(cls, instance, **kwargs):
         doc_id = cls.get_document_id(instance)
-        rev_id = getattr(instance, '__ds_revision', token_hex(32))
+        rev_id = getattr(instance, '__ds_revision', token_hex(16))
         Change.objects.create(
             document_id=doc_id,
             revision=rev_id,
@@ -87,12 +88,28 @@ class DocumentBase(ModelSerializer):
     @classmethod
     def on_delete(cls, instance, **kwargs):
         doc_id = cls.get_document_id(instance)
-        rev_id = getattr(instance, '__ds_revision', token_hex(32))
+        rev_id = getattr(instance, '__ds_revision', token_hex(16))
         Change.objects.create(
             document_id=doc_id,
             revision=rev_id,
             deleted=True
         )
+
+    @classmethod
+    def init_revision(cls):
+        if cls.is_single_document():
+            Change.objects.create(
+                document_id=cls.Meta.document_id,
+                revision=token_hex(16)
+            )
+        else:
+            Model = cls.Meta.model
+            models = Model.objects.all()
+            for model in models:
+                Change.objects.create(
+                    document_id=cls.get_document_id(model),
+                    revision=token_hex(16)
+                )
 
     @classmethod
     def get_queryset(cls, request=None):
