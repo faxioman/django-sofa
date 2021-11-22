@@ -14,6 +14,7 @@ from .models import Change, ReplicationLog, ReplicationHistory
 from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist
 
+
 start_time = int(timezone.now().timestamp() * 1000 * 1000)
 server_uuid = hashlib.sha1(settings.SECRET_KEY.encode()).hexdigest()[:32]
 
@@ -233,36 +234,25 @@ def bulk_get(request):
 @csrf_exempt
 @cache_control(must_revalidate=True)
 def revs_diff(request):
-    body = json.loads(request.body.decode('utf-8'))
+    #TODO: and deleted document?
+    changed_docs = json.loads(request.body.decode('utf-8'))
 
     docs_filter = Q()
 
-    for doc_id, revisions in body.items():
+    for doc_id, revisions in changed_docs.items():
         for revision in revisions:
             docs_filter |= Q(document_id=doc_id, revision=revision.split('-')[1])
 
     existing_docs = Change.objects.filter(docs_filter)
-    missing = {}
 
-    # search missing revisions
-    for doc in existing_docs:
-        if doc.document_id not in body or doc.revision not in body[doc.document_id]:
-            if doc.document_id in missing:
-                missing[doc.document_id]['missing'].append(doc.revision)
-            else:
-                missing[doc.document_id] = {
-                    'missing': [doc.revision]
-                }
+    # clean existing doc from changed_docs
+    for existing_doc in existing_docs:
+        changed_docs[existing_doc.document_id] = [i for i in changed_docs[existing_doc.document_id] if not i.endswith(f"-{existing_doc.revision}")]
 
-    # search missing documents
-    existing_docs_ids = [c.document_id for c in existing_docs]
-    for doc in body.keys():
-        if doc not in existing_docs_ids:
-            missing[doc] = {
-                'missing': body[doc]
-            }
+    # clean doc without revisions
+    changed_docs = {k: v for (k, v) in changed_docs.items() if v}
 
-    return JsonResponse(missing)
+    return JsonResponse({k: {"missing": v} for (k, v) in changed_docs.items()})
 
 
 @require_http_methods(['GET', 'POST'])
@@ -290,7 +280,7 @@ def document(request, document_id):
         return JsonResponse([latest_changes[0].get_document(request)], safe=False)
 
     if request.method == 'POST':
-        res = []
+        affected = []
 
         # TODO: the request body should be read as stream
         body = json.loads(request.body.decode('utf-8'))
@@ -305,37 +295,22 @@ def document(request, document_id):
 
             doc_class = get_class_by_document_id(doc_id)
             if not doc_class:
+                # no related doc in django
                 continue
 
-            if doc_class.is_single_document():
-                continue
+            #TODO: and deleted documents?
+            res = doc_class.update_or_create(doc_id, rev_id, doc, request)
+            if res:
+                affected.append(res)
 
-            # update doc
-            try:
-                current_instance = doc_class.get_document_instance(doc_id, request)
-            except ObjectDoesNotExist:
-                id_field = doc_class.get_replica_field()
-                current_instance = doc_class.Meta.model(**{id_field: doc_id})
-
-            current_instance.__ds_revision = rev_id.split('-')[1]
-            doc_serializer = doc_class(current_instance, data=doc, partial=True)
-            if doc_serializer.is_valid():
-                #TODO: errors?
-                doc_serializer.save()
-
-                res.append({
-                    "id": doc_id,
-                    "rev": rev_id
-                })
-
-        return JsonResponse(res, safe=False)
+        return JsonResponse(affected, safe=False)
 
 
 @require_http_methods(['POST'])
 @csrf_exempt
 @cache_control(must_revalidate=True)
 def bulk_docs(request):
-    res = []
+    affected = []
 
     # TODO: the request body should be read as stream
     body = json.loads(request.body.decode('utf-8'))
@@ -353,31 +328,9 @@ def bulk_docs(request):
             # no related doc in django
             continue
 
-        if doc_class.is_single_document():
-            # single document updated is not yet implemented
-            continue
+        #TODO: and deleted documents?
+        res = doc_class.update_or_create(doc_id, rev_id, doc, request)
+        if res:
+            affected.append(res)
 
-        # update doc
-        try:
-            current_instance = doc_class.get_document_instance(doc_id, request)
-        except ObjectDoesNotExist:
-            id_field = doc_class.get_replica_field()
-            current_instance = doc_class.Meta.model(**{id_field: doc_id})
-
-        current_instance.__ds_revision = rev_id.split('-')[1]
-        doc_serializer = doc_class(current_instance, data=doc, partial=True)
-        if doc_serializer.is_valid():
-            #TODO: errors?
-            doc_serializer.save()
-
-            res.append({
-                "id": doc_id,
-                "rev": rev_id
-            })
-
-        res.append({
-            "id": doc_id,
-            "rev": rev_id
-        })
-
-    return JsonResponse(res, safe=False)
+    return JsonResponse(affected, safe=False)

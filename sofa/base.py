@@ -1,10 +1,14 @@
 from secrets import token_hex
 
+from django.core.exceptions import ObjectDoesNotExist
 from rest_framework.serializers import ModelSerializer
 from rest_framework.renderers import JSONRenderer
 from .models import Change
+import logging
+
 
 document_renderer = JSONRenderer()
+logger = logging.getLogger("django-sofa")
 
 
 class DocumentBase(ModelSerializer):
@@ -74,7 +78,7 @@ class DocumentBase(ModelSerializer):
     @classmethod
     def on_change(cls, instance, **kwargs):
         doc_id = cls.get_document_id(instance)
-        rev_id = getattr(instance, '__ds_revision', token_hex(8))
+        rev_id = getattr(instance, '__ds_revision', token_hex(32))
         Change.objects.create(
             document_id=doc_id,
             revision=rev_id,
@@ -83,7 +87,7 @@ class DocumentBase(ModelSerializer):
     @classmethod
     def on_delete(cls, instance, **kwargs):
         doc_id = cls.get_document_id(instance)
-        rev_id = instance.__ds_revision if hasattr(instance, '__ds_revision') else token_hex(8)
+        rev_id = getattr(instance, '__ds_revision', token_hex(32))
         Change.objects.create(
             document_id=doc_id,
             revision=rev_id,
@@ -94,3 +98,28 @@ class DocumentBase(ModelSerializer):
     def get_queryset(cls, request=None):
         Model = cls.Meta.model
         return Model.objects.all()
+
+    @classmethod
+    def update_or_create(cls, doc_id, rev_id, content, request):
+        if cls.is_single_document():
+            # single document updated is not yet implemented
+            return
+
+        try:
+            current_instance = cls.get_document_instance(doc_id, request)
+        except ObjectDoesNotExist:
+            id_field = cls.get_replica_field()
+            current_instance = cls.Meta.model(**{id_field: doc_id})
+
+        doc_serializer = cls(current_instance, data=content, partial=True)
+
+        try:
+            doc_serializer.is_valid(raise_exception=True)
+        except Exception as ex:
+            logging.error(f'Error updating doc {doc_id}.', exc_info=ex)
+        else:
+            doc_serializer.save(__ds_revision=rev_id.split('-')[1])
+            return {
+                "id": doc_id,
+                "rev": rev_id
+            }
