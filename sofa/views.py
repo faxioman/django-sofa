@@ -234,7 +234,7 @@ def bulk_get(request):
 @csrf_exempt
 @cache_control(must_revalidate=True)
 def revs_diff(request):
-    # TODO: and deleted document?
+    # TODO: and existing deleted document?
     changed_docs = json.loads(request.body.decode('utf-8'))
 
     docs_filter = Q()
@@ -253,6 +253,30 @@ def revs_diff(request):
     changed_docs = {k: v for (k, v) in changed_docs.items() if v}
 
     return JsonResponse({k: {"missing": v} for (k, v) in changed_docs.items()})
+
+
+def update_doc(request):
+    affected = []
+    # TODO: the request body should be read as stream
+    body = json.loads(request.body.decode('utf-8'))
+
+    if body.get('new_edits', True):
+        return HttpResponseBadRequest('Docs without revision are not supported')
+
+    for doc in body['docs']:
+        doc_id = doc.pop('_id')
+        rev_id = doc.pop('_rev')
+
+        doc_class = get_class_by_document_id(doc_id)
+        if not doc_class:
+            # no related doc in django
+            continue
+
+        res = doc_class.apply_changes(doc_id, rev_id, doc, request)
+        if res:
+            affected.append(res)
+
+    return affected
 
 
 @require_http_methods(['GET', 'POST'])
@@ -280,29 +304,7 @@ def document(request, document_id):
         return JsonResponse([latest_changes[0].get_document(request)], safe=False)
 
     if request.method == 'POST':
-        affected = []
-
-        # TODO: the request body should be read as stream
-        body = json.loads(request.body.decode('utf-8'))
-
-        if body.get('new_edits', True):
-            # TODO auto generate revision id ... but we are a replicator ... needed?
-            return HttpResponseBadRequest('Docs without revision are not supported')
-
-        for doc in body['docs']:
-            doc_id = doc.pop('_id')
-            rev_id = doc.pop('_rev')
-
-            doc_class = get_class_by_document_id(doc_id)
-            if not doc_class:
-                # no related doc in django
-                continue
-
-            # TODO: and deleted documents?
-            res = doc_class.update_or_create(doc_id, rev_id, doc, request)
-            if res:
-                affected.append(res)
-
+        affected = update_doc(request)
         return JsonResponse(affected, safe=False)
 
 
@@ -310,27 +312,5 @@ def document(request, document_id):
 @csrf_exempt
 @cache_control(must_revalidate=True)
 def bulk_docs(request):
-    affected = []
-
-    # TODO: the request body should be read as stream
-    body = json.loads(request.body.decode('utf-8'))
-
-    if body.get('new_edits', True):
-        # TODO auto generate revision id ... but we are a replicator ... needed?
-        return HttpResponseBadRequest('Docs without revision are not supported')
-
-    for doc in body['docs']:
-        doc_id = doc.pop('_id')
-        rev_id = doc.pop('_rev')
-
-        doc_class = get_class_by_document_id(doc_id)
-        if not doc_class:
-            # no related doc in django
-            continue
-
-        # TODO: and deleted documents?
-        res = doc_class.update_or_create(doc_id, rev_id, doc, request)
-        if res:
-            affected.append(res)
-
+    affected = update_doc(request)
     return JsonResponse(affected, safe=False)

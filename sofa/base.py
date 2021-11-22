@@ -1,7 +1,6 @@
 from secrets import token_hex
 
 from django.core.exceptions import ObjectDoesNotExist
-from django.db.models import Subquery
 from rest_framework.serializers import ModelSerializer
 from rest_framework.renderers import JSONRenderer
 from .models import Change
@@ -117,16 +116,27 @@ class DocumentBase(ModelSerializer):
         return Model.objects.all()
 
     @classmethod
-    def update_or_create(cls, doc_id, rev_id, content, request):
+    def apply_changes(cls, doc_id, rev_id, content, request):
+        delete_doc = content.get('_deleted', False)
+
         if cls.is_single_document():
             # single document updated is not yet implemented
             return
 
         try:
             current_instance = cls.get_document_instance(doc_id, request)
+            if delete_doc:
+                current_instance.delete()
         except ObjectDoesNotExist:
-            id_field = cls.get_replica_field()
-            current_instance = cls.Meta.model(**{id_field: doc_id})
+            if not delete_doc:
+                id_field = cls.get_replica_field()
+                current_instance = cls.Meta.model(**{id_field: doc_id})
+
+        if delete_doc:
+            return {
+                "id": doc_id,
+                "rev": rev_id
+            }
 
         doc_serializer = cls(current_instance, data=content, partial=True)
 
