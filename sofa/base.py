@@ -130,7 +130,7 @@ class DocumentBase(ModelSerializer):
         except ObjectDoesNotExist:
             if not delete_doc:
                 id_field = cls.get_replica_field()
-                current_instance = cls.Meta.model(**{id_field: doc_id})
+                current_instance = cls.Meta.model(**{id_field: doc_id.split(':')[1]})
 
         if delete_doc:
             return {
