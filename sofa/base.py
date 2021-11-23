@@ -126,9 +126,16 @@ class DocumentBase(ModelSerializer):
         try:
             current_instance = cls.get_document_instance(doc_id, request)
             if delete_doc:
+                if not cls.can_delete(current_instance, request):
+                    return
                 current_instance.delete()
+            else:
+                if not cls.can_change(current_instance, request):
+                    return
         except ObjectDoesNotExist:
             if not delete_doc:
+                if not cls.can_add(request):
+                    return
                 id_field = cls.get_replica_field()
                 current_instance = cls.Meta.model(**{id_field: doc_id.split(':')[1]})
 
@@ -150,3 +157,15 @@ class DocumentBase(ModelSerializer):
                 "id": doc_id,
                 "rev": rev_id
             }
+
+    @classmethod
+    def can_change(cls, obj, request):
+        return True
+
+    @classmethod
+    def can_delete(cls, obj, request):
+        return True
+
+    @classmethod
+    def can_add(cls, request):
+        return True
