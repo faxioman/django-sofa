@@ -33,6 +33,17 @@ def get_class_by_document_id(document_id):
     return _DOCUMENT_ID_TO_CLASS.get(document_id.split(':')[0])
 
 
+def patch_model(model_class):
+
+    def get_rev(self):
+        return self.__private_ds_revision
+
+    def set_rev(self, val):
+        self.__private_ds_revision = val
+
+    model_class.__ds_revision = property(fget=get_rev, fset=set_rev)
+
+
 def load():
     load_document_classes(get_apps_packages())
     _DOCUMENT_ID_TO_CLASS.clear()
@@ -43,6 +54,7 @@ def load():
             raise Exception("Duplicated document_id found in class: {} and {}".format(cls, _DOCUMENT_ID_TO_CLASS[document_id]))
         _DOCUMENT_ID_TO_CLASS[document_id] = cls
         register_to_model_signals(cls)
+        patch_model(cls.Meta.model)
 
 
 def init_revisions():

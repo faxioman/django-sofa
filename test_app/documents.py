@@ -4,6 +4,15 @@ from sofa.base import DocumentBase
 
 class UserDocument(DocumentBase):
 
+    def update(self, instance, validated_data):
+        u = super().update(instance, validated_data)
+        return u
+
+    def create(self, validated_data):
+        request = self.context['request']
+        u = super().create(validated_data)
+        return u
+
     class Meta:
         model = User
         replica_field = 'username'

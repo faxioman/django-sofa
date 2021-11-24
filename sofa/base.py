@@ -77,20 +77,22 @@ class DocumentBase(ModelSerializer):
 
     @classmethod
     def on_change(cls, instance, **kwargs):
+        token = token_hex(16)
         doc_id = cls.get_document_id(instance)
-        rev_id = getattr(instance, '__ds_revision', token_hex(16))
+        rev_id = getattr(instance, '__ds_revision', token)
         Change.objects.create(
             document_id=doc_id,
-            revision=rev_id,
+            revision=rev_id or token,
         )
 
     @classmethod
     def on_delete(cls, instance, **kwargs):
+        token = token_hex(16)
         doc_id = cls.get_document_id(instance)
-        rev_id = getattr(instance, '__ds_revision', token_hex(16))
+        rev_id = getattr(instance, '__ds_revision', token)
         Change.objects.create(
             document_id=doc_id,
-            revision=rev_id,
+            revision=rev_id or token,
             deleted=True
         )
 
@@ -116,36 +118,27 @@ class DocumentBase(ModelSerializer):
         return Model.objects.all()
 
     @classmethod
-    def apply_changes(cls, doc_id, rev_id, content, request):
-        delete_doc = content.get('_deleted', False)
-
-        if cls.is_single_document():
-            # single document updated is not yet implemented
-            return
-
+    def apply_delete(cls, doc_id, rev_id, request):
         try:
             current_instance = cls.get_document_instance(doc_id, request)
-            if delete_doc:
-                if not cls.can_delete(current_instance, request):
-                    return
-                current_instance.delete()
-            else:
-                if not cls.can_change(current_instance, request):
-                    return
+            if not cls.can_delete(current_instance, request):
+                return
+            current_instance.delete()
         except ObjectDoesNotExist:
-            if not delete_doc:
-                if not cls.can_add(request):
-                    return
-                id_field = cls.get_replica_field()
-                current_instance = cls.Meta.model(**{id_field: doc_id.split(':')[1]})
+            pass
 
-        if delete_doc:
-            return {
-                "id": doc_id,
-                "rev": rev_id
-            }
+        return {
+            "id": doc_id,
+            "rev": rev_id
+        }
 
-        doc_serializer = cls(current_instance, data=content, partial=True)
+    @classmethod
+    def apply_update(cls, instance, doc_id, rev_id, content, request):
+
+        if not cls.can_change(instance, request):
+            return
+
+        doc_serializer = cls(instance, data=content, partial=True, context={'request': request})
 
         try:
             doc_serializer.is_valid(raise_exception=True)
@@ -157,6 +150,46 @@ class DocumentBase(ModelSerializer):
                 "id": doc_id,
                 "rev": rev_id
             }
+
+    @classmethod
+    def apply_create(cls, doc_id, rev_id, content, request):
+
+        if not cls.can_add(request):
+            return
+
+        doc_serializer = cls(data=content, partial=True, context={'request': request})
+
+        try:
+            doc_serializer.is_valid(raise_exception=True)
+        except Exception as ex:
+            logging.error(f'Error creating doc {doc_id}.', exc_info=ex)
+        else:
+            id_field = cls.get_replica_field()
+            additional_fields = {
+                id_field: doc_id.split(':')[1],
+                "__ds_revision": rev_id.split('-')[1]
+            }
+            doc_serializer.save(**additional_fields)
+            return {
+                "id": doc_id,
+                "rev": rev_id
+            }
+
+    @classmethod
+    def apply_changes(cls, doc_id, rev_id, content, request):
+
+        if cls.is_single_document():
+            # single document are always readonly
+            return
+
+        if content.get('_deleted', False):
+            return cls.apply_delete(doc_id, rev_id, request)
+
+        try:
+            current_instance = cls.get_document_instance(doc_id, request)
+            return cls.apply_update(current_instance, doc_id, rev_id, content, request)
+        except ObjectDoesNotExist:
+            return cls.apply_create(doc_id, rev_id, content, request)
 
     @classmethod
     def can_change(cls, obj, request):
