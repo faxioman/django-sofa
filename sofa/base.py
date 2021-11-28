@@ -61,18 +61,21 @@ class DocumentBase(ModelSerializer):
             return cls.get_queryset(request).get(**{cls.get_replica_field(): entity_id})
 
     @classmethod
-    def get_document_content(cls, doc_id, revision, revisions, request):
-        instance = cls.get_document_instance(doc_id, request)
-        if cls.is_single_document():
-            serializer = cls(instance, many=True)
-            return cls.wrap_content_with_metadata(doc_id, serializer.data, revision, revisions)
-        else:
-            serializer = cls(instance)
-            return cls.wrap_content_with_metadata(doc_id, serializer.data, revision, revisions)
+    def get_document_content(cls, doc_id, revision, revisions, request, force_delete=False):
+
+        if force_delete:
+            return cls.wrap_content_with_metadata(doc_id, {"_deleted": True}, revision, revisions)
+
+        try:
+            instance = cls.get_document_instance(doc_id, request)
+        except ObjectDoesNotExist:
+            return cls.wrap_content_with_metadata(doc_id, {"_deleted": True}, revision, revisions)
+        serializer = cls(instance, many=cls.is_single_document())
+        return cls.wrap_content_with_metadata(doc_id, serializer.data, revision, revisions)
 
     @classmethod
-    def get_document_content_as_json(cls, doc_id, revision, revisions, request):
-        document_content = cls.get_document_content(doc_id, revision, revisions, request)
+    def get_document_content_as_json(cls, doc_id, revision, revisions, request, force_delete=False):
+        document_content = cls.get_document_content(doc_id, revision, revisions, request, force_delete)
         return document_renderer.render(document_content).decode('utf-8')
 
     @classmethod

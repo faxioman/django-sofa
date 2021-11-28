@@ -1,8 +1,8 @@
 import json
 
 from django.db import transaction
-from django.db.models import Max, CharField, Q
-from django.db.models.functions import Cast
+from django.db.models import Max, CharField, Q, Value, Subquery
+from django.db.models.functions import Cast, Concat
 from django.http import JsonResponse, HttpResponseForbidden, HttpResponse, HttpResponseNotFound, StreamingHttpResponse, HttpResponseBadRequest
 from django.views.decorators.cache import cache_control
 from django.views.decorators.csrf import csrf_exempt
@@ -12,7 +12,6 @@ import hashlib
 from .loader import get_class_by_document_id
 from .models import Change, ReplicationLog, ReplicationHistory
 from django.conf import settings
-from django.core.exceptions import ObjectDoesNotExist
 
 
 start_time = int(timezone.now().timestamp() * 1000 * 1000)
@@ -121,9 +120,9 @@ def changes(request):
     for change in Change.objects.filter(pk__gt=since).values('document_id').annotate(id=Max('pk'), deleted=Max('deleted')).order_by('id')[:limit]:
         # TODO: instead of querying, use ArrayAgg for revisions if db is postgres
         change_id = change['id']
-        revisions = Change.objects.filter(pk__gt=since, document_id=change['document_id']).annotate(rev=Cast('revision', CharField())).values('rev').order_by('pk')
+        revisions = Change.objects.filter(pk__gt=since, document_id=change['document_id']).annotate(rev=Concat(Value('1-'), Cast('revision', CharField()))).values('rev').order_by('pk')
         row = {
-            "seq": change_id, "id": change['document_id'], "changes": list(revisions)
+            "seq": change_id, "id": change['document_id'], "changes": revisions[::-1]
         }
         if change["deleted"] == 1:
             row["deleted"] = True
@@ -143,29 +142,35 @@ def changes(request):
 @csrf_exempt
 @cache_control(must_revalidate=True)
 def all_docs(request):
-    # TODO: make as stream
     body = json.loads(request.body.decode('utf-8'))
     keys = body.get('keys', [])
     include_docs = request.GET.get('include_docs') == 'true'
-    changes = Change.objects.filter(document_id__in=keys).values('document_id', 'revision').annotate(id=Max('pk'))
-    return JsonResponse({
-        "offset": 0,
-        "rows": [{
-            "id": d['document_id'],
-            "key": d['document_id'],
+
+    docs_changes = Change.objects.filter(pk__in=Subquery(Change.objects.filter(document_id__in=keys).values('document_id').annotate(id=Max('pk')).values('id'))).all()
+
+    # never returning the doc and forcing the rev to empty string is the only way I found to force bulk_get.
+    # I also found sync gateway returning the rev as empty string
+    # we need to change 1- ... is checked in pouchdb :(
+
+    rows = [
+        {
+            "id": d.document_id,
+            "key": d.document_id,
             "value": {
-                "rev": f"1-{d['revision']}"
+                "rev": "" # f"1-{d.revision}"
             },
-            "doc": Change(document_id=d['document_id'], revision=d['revision']).get_document(request) if include_docs else None,
-        } for d in changes],
-        "total_rows": len(changes),
+            # "doc": Change(document_id=d.document_id, revision=d.revision).get_document(request) if include_docs else None
+        } for d in docs_changes
+    ]
+
+    return JsonResponse({
+        "rows": rows,
+        "total_rows": len(rows),
         "update_seq": Change.objects.latest('id').id
     })
 
 
 def iter_documents(request, requested_docs, return_revisions):
-
-    yield '{"results": ['
 
     ids = {d['id'] for d in requested_docs['docs']}
 
@@ -180,34 +185,30 @@ def iter_documents(request, requested_docs, return_revisions):
             "revisions": Change.objects.get_revisions_for_document(change.document_id)
         }
 
+    yield '{"results": ['
+
     first = True
 
-    for doc in requested_docs['docs']:
+    for key, value in docs_map.items():
 
         if not first:
             yield ","
 
-        yield f'{{"id": "{doc["id"]}", "docs": ['
+        first = False
 
-        try:
-            if doc['rev'] == docs_map[doc['id']]['rev'] and docs_map[doc['id']]["deleted"] != 1:
-                document_class = get_class_by_document_id(doc['id'])
-                rendered_doc = document_class.get_document_content_as_json(doc['id'], doc['rev'], docs_map[doc['id']]["revisions"] if return_revisions else [], request)
-                yield f'{{"ok": {rendered_doc}}}'
-            else:
-                raise KeyError
-        except (KeyError, ObjectDoesNotExist):
-            yield json.dumps({
-                "ok": {
-                    "_id": doc["id"],
-                    "_rev": f"1-{doc['rev']}",
-                    "_deleted": True
-                }
-            })
+        yield f'{{"id": "{key}", "docs": ['
+
+        document_class = get_class_by_document_id(key)
+
+        if not value['deleted']:
+            content = document_class.get_document_content_as_json(key, value['rev'], value["revisions"] if return_revisions else [], request)
+            yield f'{{"ok": {content}}}'
+
+        else:
+            content = document_class.get_document_content_as_json(key, value['rev'], value["revisions"] if return_revisions else [], request, force_delete=True)
+            yield f'{{"ok": {content}}}'
 
         yield ']}'
-
-        first = False
 
     yield ']}'
 
@@ -220,6 +221,9 @@ def bulk_get(request):
 
     if not only_latest:
         return HttpResponseBadRequest('Only latest revision are allowed')
+
+    if not request.accepts('application/json'):
+        return HttpResponseBadRequest('Only application/json type is supported as response content')
 
     return_revisions = request.GET.get('revs') == 'true'
     body = json.loads(request.body.decode('utf-8'))
@@ -295,12 +299,6 @@ def document(request, document_id):
             raise NotImplementedError
 
         latest_changes = Change.objects.get_latest_changes(ids=[document_id])
-        last_change = latest_changes[0]
-
-        if last_change.deleted == 1:
-            return JsonResponse([{
-                "missing": f"1-{last_change.revision}"
-            }], safe=False)
         return JsonResponse([latest_changes[0].get_document(request)], safe=False)
 
     if request.method == 'POST':
