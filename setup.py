@@ -31,13 +31,6 @@ def get_version(package):
 version = get_version('sofa')
 
 
-if sys.argv[-1] == 'publish':
-    shutil.rmtree('dist')
-    shutil.rmtree('build')
-    shutil.rmtree('django-sofa.egg-info')
-    sys.exit()
-
-
 setup(
     name='django-sofa',
     version=version,
