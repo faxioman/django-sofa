@@ -1,3 +1,5 @@
 __pycache__
 /.idea
 *.sqlite3
+/dist
+/django_sofa.egg-info
