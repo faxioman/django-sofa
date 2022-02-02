@@ -70,8 +70,8 @@ class DocumentBase(ModelSerializer):
             instance = cls.get_document_instance(doc_id, request)
         except ObjectDoesNotExist:
             return cls.wrap_content_with_metadata(doc_id, {"_deleted": True}, revision, revisions)
-        serializer = cls(instance, many=cls.is_single_document())
-        return cls.wrap_content_with_metadata(doc_id, serializer.data, revision, revisions)
+        doc_serializer = cls(instance, many=cls.is_single_document(), context={'request': request})
+        return cls.wrap_content_with_metadata(doc_id, doc_serializer.data, revision, revisions)
 
     @classmethod
     def get_document_content_as_json(cls, doc_id, revision, revisions, request, force_delete=False):
