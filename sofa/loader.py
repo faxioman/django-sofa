@@ -62,5 +62,5 @@ def init_revisions():
     with transaction.atomic():
         Change.objects.all().delete()
         for document_class in _DOCUMENT_ID_TO_CLASS.values():
-            document_class.init_revision()
+            document_class.add_revision()
 

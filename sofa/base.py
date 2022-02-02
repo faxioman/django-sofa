@@ -106,20 +106,26 @@ class DocumentBase(ModelSerializer):
             )
 
     @classmethod
-    def init_revision(cls):
+    def add_revision(cls, instance=None):
         if cls.is_single_document():
             Change.objects.create(
                 document_id=cls.Meta.document_id,
                 revision=token_hex(16)
             )
         else:
-            Model = cls.Meta.model
-            models = Model.objects.all()
-            for model in models:
+            if instance:
                 Change.objects.create(
-                    document_id=cls.get_document_id(model),
+                    document_id=cls.get_document_id(instance),
                     revision=token_hex(16)
                 )
+            else:
+                Model = cls.Meta.model
+                models = Model.objects.all()
+                for model in models:
+                    Change.objects.create(
+                        document_id=cls.get_document_id(model),
+                        revision=token_hex(16)
+                    )
 
     @classmethod
     def get_queryset(cls, request=None):
