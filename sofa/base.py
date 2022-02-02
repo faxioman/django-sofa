@@ -93,11 +93,17 @@ class DocumentBase(ModelSerializer):
         token = token_hex(16)
         doc_id = cls.get_document_id(instance)
         rev_id = getattr(instance, '__ds_revision', token)
-        Change.objects.create(
-            document_id=doc_id,
-            revision=rev_id or token,
-            deleted=True
-        )
+        if cls.is_single_document():
+            Change.objects.create(
+                document_id=doc_id,
+                revision=rev_id or token,
+            )
+        else:
+            Change.objects.create(
+                document_id=doc_id,
+                revision=rev_id or token,
+                deleted=True
+            )
 
     @classmethod
     def init_revision(cls):
